@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_run": "2026-07-17T09:41:26Z",
+  "last_run": "2026-07-17T16:44:44Z",
   "active_prs": [
     {
       "repo": "tushar1551/sipdash",
@@ -25,17 +25,26 @@
       "title": "assets/js-vars/user.js should set Cache-Control header to prevent caching by proxies",
       "status": "opened",
       "created_at": "2026-07-17T09:41:26Z"
+    },
+    {
+      "repo": "sladkoff/minecraft-prometheus-exporter",
+      "issue_number": 232,
+      "pr_number": null,
+      "title": "[Bug Report] TPS metrics don't work on Folia",
+      "status": "opened",
+      "created_at": "2026-07-17T16:44:44Z"
     }
   ],
   "current_task": null,
   "repos_explored": [
     "tushar1551/sipdash",
     "jaraco/keyring",
-    "indico/indico"
+    "indico/indico",
+    "sladkoff/minecraft-prometheus-exporter"
   ],
-  "total_contributions": 3,
-  "total_issues_resolved": 3,
-  "total_prs_opened": 3,
+  "total_contributions": 4,
+  "total_issues_resolved": 4,
+  "total_prs_opened": 4,
   "total_prs_merged": 0,
   "languages_experience": {},
   "consecutive_failures": 1,
