@@ -13,7 +13,7 @@ export GIT_TERMINAL_PROMPT=0
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
-log()  { echo "[codevoyager] $(date '+%H:%M:%S') $*"; }
+log()  { echo "[codevoyager] $(date '+%H:%M:%S') $*" >&2; }
 die()  { log "FATAL: $*"; exit 1; }
 
 # ─── API call ──────────────────────────────────────────────────────────────
@@ -119,8 +119,8 @@ pick_best_issue() {
   used_repos="$(echo "$state" | jq -r '.repos_explored // [] | join("|")')"
 
   echo "$issues_json" | jq -r --arg used "$used_repos" '
-    [.[] | select(.repository.full_name | test("^(" + $used + ")"; "x") | not)]
-    | first
+    [.[] | select(.repository.nameWithOwner != null) | select(.repository.nameWithOwner | test("^(" + $used + ")") | not)]
+    | first // null
   '
 }
 
