@@ -1,45 +1,51 @@
-# CodeVoyager — Regras de Qualidade
+# CodeVoyager — Quality Rules
 
-## 1. Código Real e Funcional
+## 1. Real and Functional Code
 
-- Todo código gerado DEVE ser funcional e executável
-- Proibido placeholders, `# TODO`, `pass`, `return None` vazio, `...`, stubs
-- NADA de "exemplo", "ilustrativo", "simulado"
-- Código DEVE passar em lint e testes existentes do projeto
+- All generated code MUST be functional and executable
+- No placeholders, `# TODO`, `pass`, `empty return None`, `...`, stubs
+- Nothing "example", "illustrative", or "simulated"
+- Code MUST pass the project's existing lint and tests
 
-## 2. Testes Obrigatórios
+## 2. Tests Required
 
-- Toda contribuição DEVE incluir ou atualizar testes
-- Testes DEVEM passar localmente antes do commit
-- Preferência pelo framework de testes já usado no projeto
+- Every contribution MUST include or update tests
+- Tests MUST pass locally before commit
+- Prefer the test framework already used in the project
 
-## 3. Respeito ao Projeto
+## 3. Project Respect
 
-- Seguir estilo, formatação e convenções já existentes
-- Não adicionar dependências desnecessárias
-- Não quebrar API pública ou interface existente
-- Follow o CODE_OF_CONDUCT.md se existir
+- Follow existing style, formatting, and conventions
+- Do not add unnecessary dependencies
+- Do not break existing public API or interface
+- Follow CODE_OF_CONDUCT.md if it exists
 
-## 4. PRs Descritivos
+## 4. Descriptive PRs
 
-- Título: `[codevoyager] tipo: descrição curta`
-- Descrição: o que foi feito, por que, como testar, referência à issue
-- Incluir `Closes #N` se aplicável
+- Title: `[codevoyager] type: short description`
+- Description: what was done, why, how to test, issue reference
+- Include `Closes #N` when applicable
 
 ## 5. Feedback Loop
 
-- Ao receber review/comentário: entender, adaptar, melhorar
-- Responder educadamente e explicar mudanças
-- Se não concordar, argumentar com fatos técnicos
+- When receiving review/comment: understand, adapt, improve
+- Respond politely and explain changes
+- If disagreeing, argue with technical facts
 
-## 6. Segurança
+## 6. Security
 
-- Nunca expor tokens, secrets ou credenciais
-- Segregar escopo do PAT ao mínimo necessário
-- Não commitar arquivos sensíveis
+- Never expose tokens, secrets, or credentials
+- Keep PAT scope to the minimum necessary
+- Do not commit sensitive files
 
-## 7. Exploração
+## 7. Exploration
 
-- Preferir repositórios ativos (commit < 6 meses)
-- Preferir issues com labels `good first issue`, `help wanted`, `bug`
-- Evitar forks de projetos pessoais sem atividade
+- Prefer active repositories (commit < 6 months)
+- Prefer issues with `good first issue`, `help wanted`, `bug` labels
+- Avoid forking personal projects with no activity
+
+## 8. Language
+
+- All work MUST be in English
+- Code comments, commit messages, PR descriptions in English
+- Use English as default; only switch if project explicitly uses another language

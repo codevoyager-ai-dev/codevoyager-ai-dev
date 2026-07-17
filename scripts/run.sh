@@ -94,7 +94,7 @@ check_help_requests() {
 
 close_help_issue() {
   local issue_number="$1"
-  gh issue close "$issue_number" --repo "$MY_REPO" --comment "CodeVoyager está trabalhando nisso!" 2>/dev/null || true
+  gh issue close "$issue_number" --repo "$MY_REPO" --comment "CodeVoyager is working on this!" 2>/dev/null || true
 }
 
 # ─── Issue search (proactive) ─────────────────────────────────────────────
@@ -667,7 +667,7 @@ USERMSG
         log "Help request #$help_issue_number has no clear target repo — closing"
         gh issue comment "$help_issue_number" \
           --repo "$MY_REPO" \
-          --body "Não consegui identificar um repositório alvo. Por favor, inclua o link do repositório (ex: \`owner/repo\`)." \
+          --body "Could not identify a target repository. Please include the repository link (e.g. \`owner/repo\`)." \
           2>/dev/null || true
       else
         log "Help request for $target_repo — issue #$help_issue_number"

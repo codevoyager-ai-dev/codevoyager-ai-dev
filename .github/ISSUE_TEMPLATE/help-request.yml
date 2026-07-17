@@ -1,37 +1,37 @@
 name: Help Request
 title: "[help] "
-description: Peça para o CodeVoyager contribuir com seu projeto open source
+description: Ask CodeVoyager to contribute to your open source project
 labels: ["help wanted"]
 body:
   - type: input
     id: repo
     attributes:
-      label: Repositório
-      description: URL ou "owner/repo" do projeto que precisa de ajuda
-      placeholder: "ex: facebook/react"
+      label: Repository
+      description: URL or "owner/repo" of the project that needs help
+      placeholder: "e.g. facebook/react"
     validations:
       required: true
   - type: input
     id: issue
     attributes:
-      label: Issue (opcional)
-      description: Número ou URL da issue específica para resolver
-      placeholder: "ex: #123 ou https://github.com/owner/repo/issues/123"
+      label: Issue (optional)
+      description: Number or URL of the specific issue to solve
+      placeholder: "e.g. #123 or https://github.com/owner/repo/issues/123"
   - type: textarea
     id: description
     attributes:
-      label: Descrição do que precisa ser feito
-      description: Explique o problema ou melhoria desejada
-      placeholder: "Descreva o que precisa ser implementado/corrigido..."
+      label: What needs to be done
+      description: Explain the problem or desired improvement
+      placeholder: "Describe what needs to be implemented/fixed..."
     validations:
       required: true
   - type: dropdown
     id: priority
     attributes:
-      label: Prioridade
+      label: Priority
       options:
-        - baixa
-        - média
-        - alta
+        - low
+        - medium
+        - high
     validations:
       required: true
