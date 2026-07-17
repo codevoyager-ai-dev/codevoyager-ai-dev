@@ -33,15 +33,28 @@ save_state() {
 
 check_notifications() {
   log "Checking notifications..."
-  gh api notifications --jq '[
-    .[] | select(.reason == "mention" or .reason == "review_requested" or .reason == "comment")
+  local result
+  result="$(gh api notifications --jq '[
+    .[] | select(.reason == "mention" or .reason == "review_requested" or .reason == "comment" or .reason == "author" or .reason == "state_change")
     | {id, reason, subject: {title, url, latest_comment_url}, repository: {full_name}}
-  ]' 2>/dev/null || echo "[]"
+  ]' 2>&1)" || {
+    log "WARNING: Failed to fetch notifications: $result"
+    echo "[]"
+    return
+  }
+  if [[ -z "$result" ]]; then
+    result="[]"
+  fi
+  echo "$result"
+  local count
+  count="$(echo "$result" | jq length)"
+  log "Fetched $count notification(s)"
 }
 
 mark_notification_done() {
   local notif_id="$1"
-  gh api "notifications/$notif_id" -X PATCH --silent 2>/dev/null || true
+  log "Marking notification $notif_id as done..."
+  gh api "notifications/threads/$notif_id" -X PATCH --silent 2>/dev/null || true
 }
 
 # ─── Own-repo help requests ────────────────────────────────────────────────
@@ -57,7 +70,7 @@ check_help_requests() {
     --json number,title,body,createdAt \
     --limit 10 \
     2>/dev/null | jq '[
-      .[] | select(.body != null)
+      .[] | select(.body != null and .body != "")
       | {number, title, body, created_at: .createdAt}
     ]'
 }
@@ -70,10 +83,14 @@ close_help_issue() {
 resolve_help_target() {
   local body="$1"
   local repo
-  repo="$(echo "$body" | grep -oP 'https?://github\.com/\K[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
+  repo="$(echo "$body" | grep -oE 'https?://github\.com/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 | sed 's|https\?://github\.com/||' || echo "")"
   if [[ -z "$repo" ]]; then
-    repo="$(echo "$body" | grep -oP '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
+    repo="$(echo "$body" | grep -oE '^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
   fi
+  if [[ -z "$repo" ]]; then
+    repo="$(echo "$body" | grep -oE '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
+  fi
+  log "Resolved help target to: $repo"
   echo "$repo"
 }
 
@@ -82,14 +99,14 @@ resolve_help_target() {
 find_issue() {
   log "Searching for issues to solve..."
   gh search issues \
-    --label "good-first-issue" \
+    --label "good first issue" \
     --label "help wanted" \
     --label "bug" \
     --state open \
     --sort updated \
     --limit 30 \
     --json repository,number,title,url,body \
-    -- 'language:python language:javascript language:typescript language:go language:rust language:java language:kotlin' \
+    -- "language:python,javascript,typescript,go,rust,java,kotlin" \
     2>/dev/null
 }
 
@@ -97,17 +114,13 @@ pick_best_issue() {
   local issues_json="$1"
   local state="$2"
 
-  local used_repos
-  used_repos="$(echo "$state" | jq -r '.repos_explored // [] | join("|")')"
+  echo "$issues_json" | jq -r --argjson state "$state" '
+    def is_used($repo): 
+      ($state.repos_explored // []) | index($repo) != null;
 
-  if [[ -z "$used_repos" ]]; then
-    echo "$issues_json" | jq -r 'first // null'
-  else
-    echo "$issues_json" | jq -r --arg used "$used_repos" '
-      [.[] | select(.repository.nameWithOwner != null) | select(.repository.nameWithOwner | test("^(" + $used + ")") | not)]
-      | first // null
-    '
-  fi
+    [.[] | select(.repository != null) | select(.repository.nameWithOwner != null) | select(is_used(.repository.nameWithOwner) | not)]
+    | first // null
+  '
 }
 
 # ─── Repo operations ───────────────────────────────────────────────────────
@@ -117,7 +130,7 @@ fork_repo() {
   local fork_name="${repo_full#*/}"
   log "Forking $repo_full ..."
   gh repo fork "$repo_full" --clone=false >&2 2>/dev/null || true
-  echo "https://x-access-token:${GH_TOKEN}@github.com/codevoyager-ai-dev/${fork_name}.git"
+  echo "https://codevoyager-ai-dev:${GH_TOKEN}@github.com/codevoyager-ai-dev/${fork_name}.git"
 }
 
 create_pr() {
@@ -363,7 +376,7 @@ main() {
       comment_body="$(gh api "$comment_url" --jq '.body' 2>/dev/null || echo "")"
     fi
     if [[ -n "$subject_url" && "$subject_url" != "null" ]]; then
-      pr_number="$(echo "$subject_url" | grep -oP '\d+$')"
+      pr_number="$(echo "$subject_url" | grep -oE '[0-9]+$')"
       pr_title="$(gh api "$subject_url" --jq '.title' 2>/dev/null || echo "")"
     fi
 

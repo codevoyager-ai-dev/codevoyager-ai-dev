@@ -32,6 +32,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           export PATH="$HOME/.opencode/bin:$PATH"
+          git config --global user.name "codevoyager-ai-dev"
+          git config --global user.email "codevoyager-ai-dev@noreply.github.com"
           bash scripts/run.sh
 
       - name: Commit state updates
