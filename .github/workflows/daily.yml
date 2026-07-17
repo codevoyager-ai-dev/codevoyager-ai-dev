@@ -21,12 +21,17 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq curl git gh 2>/dev/null
+          sudo apt-get install -y -qq jq curl git gh python3 2>/dev/null
+
+      - name: Install OpenCode
+        run: |
+          curl -fsSL https://opencode.ai/install | sh
 
       - name: Run CodeVoyager
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          export PATH="$HOME/.opencode/bin:$PATH"
           bash scripts/run.sh
 
       - name: Commit state updates

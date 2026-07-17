@@ -3,40 +3,16 @@ set -euo pipefail
 
 # ─── Config ────────────────────────────────────────────────────────────────
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-API_URL="https://opencode.ai/zen/v1/chat/completions"
-MODEL="deepseek-v4-flash-free"
-AUTH="Bearer public"
-MAX_RETRIES=3
+OPENCODE_MODEL="opencode/deepseek-v4-flash-free"
 
 export GH_TOKEN="${GH_TOKEN:?GH_TOKEN not set}"
 export GIT_TERMINAL_PROMPT=0
+export PATH="$HOME/.opencode/bin:$PATH"
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
 log()  { echo "[codevoyager] $(date '+%H:%M:%S') $*" >&2; }
 die()  { log "FATAL: $*"; exit 1; }
-
-# ─── API call ──────────────────────────────────────────────────────────────
-
-api_complete() {
-  local messages_json="$1"
-  local body
-
-  body="$(jq -n --arg model "$MODEL" --argjson messages "$messages_json" '{
-    model: $model,
-    messages: $messages
-  }')"
-
-  curl -s "$API_URL" \
-    -H "Authorization: $AUTH" \
-    -H "Content-Type: application/json" \
-    -d "$body" \
-    --max-time 180
-}
-
-api_extract_content() {
-  jq -r '.choices[0].message.content // empty'
-}
 
 # ─── State management ──────────────────────────────────────────────────────
 
@@ -82,13 +58,7 @@ check_help_requests() {
     --limit 10 \
     2>/dev/null | jq '[
       .[] | select(.body != null)
-      | {
-        number,
-        title,
-        body,
-        created_at: .createdAt,
-        target_repo: (.body | capture("https?://github\\.com/(?<r>[^/\"\\s]+/[^/\"\\s]+)") // .body | capture("(?<r>[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)"))
-      }
+      | {number, title, body, created_at: .createdAt}
     ]'
 }
 
@@ -97,16 +67,28 @@ close_help_issue() {
   gh issue close "$issue_number" --repo "$MY_REPO" --comment "CodeVoyager is working on this!" 2>/dev/null || true
 }
 
+resolve_help_target() {
+  local body="$1"
+  local repo
+  repo="$(echo "$body" | grep -oP 'https?://github\.com/\K[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
+  if [[ -z "$repo" ]]; then
+    repo="$(echo "$body" | grep -oP '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
+  fi
+  echo "$repo"
+}
+
 # ─── Issue search (proactive) ─────────────────────────────────────────────
 
 find_issue() {
   log "Searching for issues to solve..."
   gh search issues \
-    --label "good-first-issue,good first issue,help wanted,bug" \
+    --label "good-first-issue" \
+    --label "help wanted" \
+    --label "bug" \
     --state open \
     --sort updated \
-    --limit 20 \
-    --json repository,number,title,url,body,labels \
+    --limit 30 \
+    --json repository,number,title,url,body \
     -- 'language:python language:javascript language:typescript language:go language:rust language:java language:kotlin' \
     2>/dev/null
 }
@@ -118,19 +100,24 @@ pick_best_issue() {
   local used_repos
   used_repos="$(echo "$state" | jq -r '.repos_explored // [] | join("|")')"
 
-  echo "$issues_json" | jq -r --arg used "$used_repos" '
-    [.[] | select(.repository.nameWithOwner != null) | select(.repository.nameWithOwner | test("^(" + $used + ")") | not)]
-    | first // null
-  '
+  if [[ -z "$used_repos" ]]; then
+    echo "$issues_json" | jq -r 'first // null'
+  else
+    echo "$issues_json" | jq -r --arg used "$used_repos" '
+      [.[] | select(.repository.nameWithOwner != null) | select(.repository.nameWithOwner | test("^(" + $used + ")") | not)]
+      | first // null
+    '
+  fi
 }
 
 # ─── Repo operations ───────────────────────────────────────────────────────
 
 fork_repo() {
   local repo_full="$1"
+  local fork_name="${repo_full#*/}"
   log "Forking $repo_full ..."
-  gh repo fork "$repo_full" --clone=false 2>/dev/null || true
-  echo "https://x-access-token:${GH_TOKEN}@github.com/codevoyager-ai-dev/${repo_full#*/}.git"
+  gh repo fork "$repo_full" --clone=false >&2 2>/dev/null || true
+  echo "https://x-access-token:${GH_TOKEN}@github.com/codevoyager-ai-dev/${fork_name}.git"
 }
 
 create_pr() {
@@ -150,7 +137,7 @@ create_pr() {
     2>/dev/null || true
 }
 
-# ─── Test framework detection ──────────────────────────────────────────────
+# ─── Test detection ────────────────────────────────────────────────────────
 
 detect_test_cmd() {
   local dir="$1"
@@ -169,10 +156,6 @@ detect_test_cmd() {
     return
   fi
   if ls "$dir"/test_*.py "$dir"/tests/test_*.py 2>/dev/null | head -1 >/dev/null; then
-    echo "python -m pytest -x -q 2>&1 || true"
-    return
-  fi
-  if ls "$dir"/*_test.py 2>/dev/null | head -1 >/dev/null; then
     echo "python -m pytest -x -q 2>&1 || true"
     return
   fi
@@ -230,301 +213,134 @@ install_deps() {
   return 0
 }
 
-# ─── Self-review (diff analysis) ───────────────────────────────────────────
+# ─── OpenCode autonomous agent ─────────────────────────────────────────────
 
-self_review_diff() {
-  local clone_dir="$1"
-  local system_prompt="$2"
-  local original_issue="$3"
-
-  cd "$clone_dir"
-
-  local diff_text
-  diff_text="$(git diff 2>/dev/null || true)"
-
-  if [[ -z "$diff_text" ]]; then
-    log "No diff to review"
-    return 0
-  fi
-
-  log "Running self-review on diff (${#diff_text} chars)..."
-
-  local review_prompt
-  review_prompt="$(cat <<REVIEW
-You are reviewing your own code changes. Verify:
-
-1. Does the diff actually solve the original problem?
-   Original issue: $original_issue
-
-2. Does the diff avoid breaking existing functionality?
-3. Is the code correct, idiomatic, and consistent with the project?
-4. Are there any edge cases not handled?
-5. Are the tests adequate and correct?
-
-Diff to review:
-\`\`\`diff
-$diff_text
-\`\`\`
-
-Respond with either:
-- **APPROVED** if everything is correct
-- **CHANGES NEEDED:** followed by what needs to be fixed and how
-REVIEW
-)"
-
-  local messages_json
-  messages_json="$(jq -n \
-    --arg system "$system_prompt" \
-    --arg user "$review_prompt" \
-    '[{role: "system", content: $system}, {role: "user", content: $user}]'
-  )"
-
-  local api_result
-  api_result="$(api_complete "$messages_json")"
-  local review_response
-  review_response="$(echo "$api_result" | api_extract_content)"
-
-  echo "$review_response" > "$clone_dir/.codevoyager-review.md"
-
-  if echo "$review_response" | grep -qi "^APPROVED"; then
-    log "Self-review: APPROVED"
-    return 0
-  else
-    log "Self-review: CHANGES NEEDED"
-    return 1
-  fi
-}
-
-# ─── Test-and-retry loop ──────────────────────────────────────────────────
-
-apply_and_test_loop() {
-  local clone_dir="$1"
-  local system_prompt="$2"
-  local user_msg="$3"
-  local attempt=0
-
-  while [[ "$attempt" -lt "$MAX_RETRIES" ]]; do
-    attempt=$((attempt + 1))
-    log "API call attempt $attempt/$MAX_RETRIES ..."
-
-    local messages_json
-    messages_json="$(jq -n \
-      --arg system "$system_prompt" \
-      --arg user "$user_msg" \
-      '[{role: "system", content: $system}, {role: "user", content: $user}]'
-    )"
-
-    local api_result
-    api_result="$(api_complete "$messages_json")"
-    local ai_response
-    ai_response="$(echo "$api_result" | api_extract_content)"
-
-    log "AI response received (${#ai_response} chars)"
-    echo "$ai_response" > "$clone_dir/.codevoyager-response.md"
-
-    install_deps "$clone_dir" || true
-
-    if run_tests "$clone_dir"; then
-      log "Tests passed on attempt $attempt"
-
-      if self_review_diff "$clone_dir" "$system_prompt" "$user_msg"; then
-        log "Self-review passed on attempt $attempt"
-        return 0
-      else
-        log "Self-review found issues on attempt $attempt"
-
-        if [[ "$attempt" -ge "$MAX_RETRIES" ]]; then
-          log "Max retries reached after self-review failure"
-          return 1
-        fi
-
-        local review_result
-        review_result="$(cat "$clone_dir/.codevoyager-review.md")"
-
-        user_msg="$(cat <<USERMSG
-The self-review found the following issues with your code changes:
-
-\`\`\`
-$review_result
-\`\`\`
-
-Fix the issues identified above. Output corrected file contents.
-Do not break the tests — they are currently passing.
-USERMSG
-)"
-      fi
-    else
-      local test_output
-      test_output="$(run_tests "$clone_dir" 2>&1 || true)"
-      log "Tests failed on attempt $attempt"
-
-      if [[ "$attempt" -ge "$MAX_RETRIES" ]]; then
-        log "Max retries reached after test failure"
-        echo "$test_output" > "$clone_dir/.codevoyager-test-failure.txt"
-        return 1
-      fi
-
-      log "Sending test output back to fix..."
-      user_msg="$(cat <<USERMSG
-The tests failed. Here is the test output:
-
-\`\`\`
-$test_output
-\`\`\`
-
-The code changes you previously suggested caused test failures.
-Fix the issues. Output corrected file contents.
-USERMSG
-)"
-    fi
-  done
-}
-
-# ─── Build system prompt ───────────────────────────────────────────────────
-
-build_system_prompt() {
+build_task_prompt() {
+  local repo_full="$1"
+  local task="$2"
+  local extra_context="$3"
   local rules
   rules="$(cat "$REPO_DIR/rules.md")"
+
   cat <<PROMPT
-You are CodeVoyager, an AI assistant that contributes to open source projects.
+You are CodeVoyager, an autonomous AI contributing to $repo_full.
 
 ## Rules
 $rules
 
+## Task
+$task
+
+## Context
+$extra_context
+
 ## Instructions
-- Generate ONLY functional, tested code
-- NO placeholders, NO examples, NO simulacra
+- Read the repository files to understand the codebase
+- Implement a real, functional solution
 - Include or update tests
-- Respect the project's existing conventions
-- Output your response as valid Markdown with code blocks
-- When making changes, output a list of files and the exact changes needed
-- Keep explanations minimal — focus on the code
+- Run the project's tests to verify your changes
+- If tests fail, fix the code until they pass
+- Do NOT commit changes — leave that to me
+- Output a summary of what you changed when done
 PROMPT
 }
 
-# ─── Solve workflow (shared between issue solving and help requests) ──────
+run_opencode_task() {
+  local target_dir="$1"
+  local prompt_file="$2"
+  local title
+  title="$(head -3 "$prompt_file" | tr '\n' ' ' | cut -c1-100)"
 
-solve_issue() {
+  log "Running OpenCode agent in $target_dir ..."
+
+  opencode run \
+    -m "$OPENCODE_MODEL" \
+    --dangerously-skip-permissions \
+    --dir "$target_dir" \
+    --title "CodeVoyager: $title" \
+    -f "$prompt_file" \
+    "Read the attached prompt file and follow the instructions. Implement the solution with real, functional code." \
+    --print-logs 2>/tmp/opencode-$$.err | tee /tmp/opencode-$$.out || true
+
+  local exit_code="${PIPESTATUS[0]}"
+  rm -f /tmp/opencode-$$.err /tmp/opencode-$$.out
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    log "OpenCode exited with code $exit_code"
+    return 1
+  fi
+
+  log "OpenCode completed successfully"
+  return 0
+}
+
+# ─── Solve workflow ────────────────────────────────────────────────────────
+
+solve_with_opencode() {
   local repo_full="$1"
-  local issue_number="$2"
-  local issue_title="$3"
-  local issue_body="$4"
-  local issue_url="$5"
-  local system_prompt="$6"
-  local state_ref="$7"
+  local task_description="$2"
+  local issue_ref="$3"
 
-  log "Solving: $repo_full#$issue_number — $issue_title"
+  log "Solving on $repo_full: $task_description"
 
   local fork_remote
   fork_remote="$(fork_repo "$repo_full")"
 
   local clone_dir
   clone_dir="$(mktemp -d)"
-  local branch_name="fix-issue-$issue_number"
+  local branch_name
+  branch_name="codevoyager-$(date +%s)"
 
   git clone --depth 1 "$fork_remote" "$clone_dir" 2>/dev/null || die "Failed to clone fork"
   cd "$clone_dir"
   git checkout -b "$branch_name"
 
-  local repo_files
-  repo_files="$(find "$clone_dir" -type f \
-    -not -path '*/.git/*' \
-    -not -path '*/node_modules/*' \
-    -not -path '*/vendor/*' \
-    -not -path '*/__pycache__/*' \
-    -not -path '*.pyc' \
-    2>/dev/null | head -100)"
+  local prompt_file
+  prompt_file="$(mktemp)"
+  build_task_prompt "$repo_full" "$task_description" "Link: $issue_ref" > "$prompt_file"
 
-  local repo_readme
-  repo_readme="$(cat "$clone_dir/README.md" 2>/dev/null || echo "No README")"
-  local build_info
-  build_info="$(cat "$clone_dir/package.json" "$clone_dir/pyproject.toml" "$clone_dir/Cargo.toml" "$clone_dir/go.mod" "$clone_dir/pom.xml" "$clone_dir/build.gradle" 2>/dev/null || echo "")"
+  if run_opencode_task "$clone_dir" "$prompt_file"; then
+    rm -f "$prompt_file"
 
-  local user_msg
-  user_msg="$(cat <<USERMSG
-## Issue
-- Repository: $repo_full
-- Issue #$issue_number: $issue_title
-- URL: $issue_url
+    install_deps "$clone_dir" || true
+    run_tests "$clone_dir" || log "Warning: tests failed after OpenCode"
 
-## Description
-$issue_body
-
-## Project Structure
-- README: $repo_readme
-- Build/Config: $(echo "$build_info" | head -300)
-
-## Key files (first 100)
-$repo_files
-
-## Task
-Implement a solution for this issue.
-The code MUST be functional, real, and include/update tests.
-Output the exact file contents or diffs.
-USERMSG
-)"
-
-  log "Starting test-and-retry loop for the solution..."
-  if apply_and_test_loop "$clone_dir" "$system_prompt" "$user_msg"; then
     cd "$clone_dir"
     git add -A 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
-      log "No changes to commit"
+      log "No changes made by OpenCode"
       cd "$REPO_DIR"
       rm -rf "$clone_dir"
       return 1
     fi
 
-    git commit -m "[codevoyager] fix: $issue_title
-
-Closes #$issue_number
-" 2>/dev/null || true
-
+    local short_msg
+    short_msg="$(echo "$task_description" | head -1 | cut -c1-80)"
+    git commit -m "[codevoyager] $short_msg" 2>/dev/null || true
     git push origin "$branch_name" 2>/dev/null || log "Push failed"
 
     local pr_body
     pr_body="## Summary
 
-This PR addresses issue #$issue_number: **$issue_title**
+$task_description
 
 ### Changes
 See commit diff for details.
 
 ### Testing
 - [x] Changes tested locally
-- [x] Tests pass
 
-Closes #$issue_number
+Ref: $issue_ref
 "
-    create_pr "$repo_full" "[codevoyager] $issue_title" "$pr_body" "$branch_name"
-
-    local s="$state_ref"
-    s="$(echo "$s" | jq \
-      --arg repo "$repo_full" \
-      --arg issue "$issue_number" \
-      --arg title "$issue_title" \
-      '.active_prs += [{
-        repo: $repo,
-        issue_number: ($issue | tonumber),
-        pr_number: null,
-        title: $title,
-        status: "opened",
-        created_at: (now | todate)
-      }] |
-      .repos_explored += [$repo] |
-      .total_contributions += 1 |
-      .total_issues_resolved += 1 |
-      .total_prs_opened += 1
-    ')"
+    create_pr "$repo_full" "[codevoyager] $short_msg" "$pr_body" "$branch_name"
 
     cd "$REPO_DIR"
     rm -rf "$clone_dir"
-    echo "$s"
     return 0
   else
+    rm -f "$prompt_file"
     cd "$REPO_DIR"
     rm -rf "$clone_dir"
-    log "Failed to solve issue after $MAX_RETRIES attempts"
     return 1
   fi
 }
@@ -537,8 +353,6 @@ main() {
 
   local state
   state="$(load_state)"
-  local system_prompt
-  system_prompt="$(build_system_prompt)"
 
   # ── Priority 1: Handle notification (PR review/comment) ─────
   local notifications
@@ -574,66 +388,21 @@ main() {
     fi
 
     if [[ -z "$pr_number" || -z "$comment_body" ]]; then
-      log "Skipping notification $notif_id — missing data"
+      log "Skipping notification — missing data"
       mark_notification_done "$notif_id"
     else
       log "Handling review: PR #$pr_number on $repo_full"
 
-      local fork_remote
-      fork_remote="$(fork_repo "$repo_full")"
-      local clone_dir
-      clone_dir="$(mktemp -d)"
-
-      git clone --depth 1 "$fork_remote" "$clone_dir" 2>/dev/null || die "Failed to clone fork"
-      cd "$clone_dir"
-      git fetch origin "pull/$pr_number/head:pr-$pr_number" 2>/dev/null || true
-      git checkout "pr-$pr_number" 2>/dev/null || git checkout -b "pr-$pr_number" main
-
-      local repo_files
-      repo_files="$(find "$clone_dir" -type f \
-        -not -path '*/.git/*' \
-        -not -path '*/node_modules/*' \
-        -not -path '*/vendor/*' \
-        -not -path '*/__pycache__/*' \
-        -not -path '*.pyc' \
-        2>/dev/null | head -50)"
-
-      local user_msg
-      user_msg="$(cat <<USERMSG
-## Context
-- Repository: $repo_full
-- PR #$pr_number: $pr_title
-- Review comment:
+      local task="Address this review comment on PR #$pr_number ($pr_title):
 
 $comment_body
 
-## Current PR branch files
-$repo_files
+Make the requested changes and ensure all tests pass."
 
-## Task
-Address the review comment above. Fix/adjust the code.
-Make real functional changes. Update tests.
-Output exact file diffs or contents.
-USERMSG
-)"
-
-      log "Starting test-and-retry for review fix..."
-      if apply_and_test_loop "$clone_dir" "$system_prompt" "$user_msg"; then
-        git add -A 2>/dev/null || true
-        if ! git diff --cached --quiet 2>/dev/null; then
-          git commit -m "[codevoyager] address review feedback for PR #$pr_number" 2>/dev/null || true
-          git push origin "pr-$pr_number" 2>/dev/null || log "Push failed"
-        fi
-
-        state="$(echo "$state" | jq \
-          --arg repo "$repo_full" \
-          --arg pr "$pr_number" \
-          '.active_prs = [.active_prs[] | if (.repo == $repo and .pr_number == $pr) then .status = "updated" else . end]'
-        )"
+      if solve_with_opencode "$repo_full" "$task" "PR #$pr_number in $repo_full"; then
+        log "PR #$pr_number updated"
       fi
 
-      cd "$REPO_DIR"
-      rm -rf "$clone_dir"
       mark_notification_done "$notif_id"
     fi
 
@@ -657,36 +426,28 @@ USERMSG
       local help_issue_body
       help_issue_body="$(echo "$help_issue" | jq -r '.body')"
       local target_repo
-      target_repo="$(echo "$help_issue" | jq -r '.target_repo.repo // empty')"
+      target_repo="$(resolve_help_target "$help_issue_body")"
 
       if [[ -z "$target_repo" ]]; then
-        target_repo="$(echo "$help_issue_body" | grep -oP '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | head -1 || echo "")"
-      fi
-
-      if [[ -z "$target_repo" ]]; then
-        log "Help request #$help_issue_number has no clear target repo — closing"
+        log "Help request #$help_issue_number has no clear target repo"
         gh issue comment "$help_issue_number" \
           --repo "$MY_REPO" \
-          --body "Could not identify a target repository. Please include the repository link (e.g. \`owner/repo\`)." \
+          --body "Could not identify a target repository. Please include a GitHub link (e.g. \`owner/repo\`)." \
           2>/dev/null || true
       else
-        log "Help request for $target_repo — issue #$help_issue_number"
+        log "Help request for $target_repo"
+
+        local task="Help with: $help_issue_title
+
+This request was made by a user in my help repository. Details:
+$help_issue_body
+
+Implement the requested changes or solve the problem described."
 
         close_help_issue "$help_issue_number"
 
-        local new_state
-        new_state="$(solve_issue \
-          "$target_repo" \
-          "" \
-          "$help_issue_title" \
-          "$help_issue_body" \
-          "" \
-          "$system_prompt" \
-          "$state"
-        )"
-
-        if [[ -n "$new_state" ]]; then
-          state="$new_state"
+        if solve_with_opencode "$target_repo" "$task" "Help request #$help_issue_number"; then
+          log "Help request #$help_issue_number completed"
         fi
       fi
 
@@ -705,7 +466,7 @@ USERMSG
       fi
 
       local repo_full
-      repo_full="$(echo "$issue" | jq -r '.repository.full_name')"
+      repo_full="$(echo "$issue" | jq -r '.repository.nameWithOwner')"
       local issue_number
       issue_number="$(echo "$issue" | jq -r '.number')"
       local issue_title
@@ -715,27 +476,50 @@ USERMSG
       local issue_url
       issue_url="$(echo "$issue" | jq -r '.url')"
 
-      local new_state
-      new_state="$(solve_issue \
-        "$repo_full" \
-        "$issue_number" \
-        "$issue_title" \
-        "$issue_body" \
-        "$issue_url" \
-        "$system_prompt" \
-        "$state"
-      )"
+      log "Found issue: $repo_full#$issue_number — $issue_title"
 
-      if [[ -n "$new_state" ]]; then
-        state="$new_state"
+      local task="Solve this issue: $issue_title
+
+Issue description:
+$issue_body
+
+Implement a real, functional solution. Include tests.
+Ensure all existing tests still pass."
+
+      if solve_with_opencode "$repo_full" "$task" "$issue_url"; then
+        state="$(echo "$state" | jq \
+          --arg repo "$repo_full" \
+          --arg issue "$issue_number" \
+          --arg title "$issue_title" \
+          '.active_prs += [{
+            repo: $repo,
+            issue_number: ($issue | tonumber),
+            pr_number: null,
+            title: $title,
+            status: "opened",
+            created_at: (now | todate)
+          }] |
+          .repos_explored += [$repo] |
+          .total_contributions += 1 |
+          .total_issues_resolved += 1 |
+          .total_prs_opened += 1
+        ')"
+
+        log "Issue #$issue_number solved"
+      else
+        log "Failed to solve issue #$issue_number"
+        state="$(echo "$state" | jq \
+          --arg issue "$issue_number" \
+          '.consecutive_failures += 1 |
+           .last_error = "Failed to solve issue #\($issue)"'
+        )"
       fi
     fi
   fi
 
   # ── Finalize ─────────────────────────────────────────────
   state="$(echo "$state" | jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-    .last_run = $now |
-    .consecutive_failures = 0
+    .last_run = $now
   ')"
 
   save_state "$state"
