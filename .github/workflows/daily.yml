@@ -25,7 +25,7 @@ jobs:
 
       - name: Install OpenCode
         run: |
-          curl -fsSL https://opencode.ai/install | sh
+          curl -fsSL https://opencode.ai/install | bash
 
       - name: Run CodeVoyager
         env:
