@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_run": "2026-07-17T03:02:21Z",
+  "last_run": "2026-07-17T09:41:26Z",
   "active_prs": [
     {
       "repo": "tushar1551/sipdash",
@@ -17,16 +17,25 @@
       "title": "ChainerBackend not deleting password from lower priority backend",
       "status": "opened",
       "created_at": "2026-07-17T03:02:21Z"
+    },
+    {
+      "repo": "indico/indico",
+      "issue_number": 6891,
+      "pr_number": null,
+      "title": "assets/js-vars/user.js should set Cache-Control header to prevent caching by proxies",
+      "status": "opened",
+      "created_at": "2026-07-17T09:41:26Z"
     }
   ],
   "current_task": null,
   "repos_explored": [
     "tushar1551/sipdash",
-    "jaraco/keyring"
+    "jaraco/keyring",
+    "indico/indico"
   ],
-  "total_contributions": 2,
-  "total_issues_resolved": 2,
-  "total_prs_opened": 2,
+  "total_contributions": 3,
+  "total_issues_resolved": 3,
+  "total_prs_opened": 3,
   "total_prs_merged": 0,
   "languages_experience": {},
   "consecutive_failures": 1,
