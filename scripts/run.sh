@@ -230,6 +230,71 @@ install_deps() {
   return 0
 }
 
+# ─── Self-review (diff analysis) ───────────────────────────────────────────
+
+self_review_diff() {
+  local clone_dir="$1"
+  local system_prompt="$2"
+  local original_issue="$3"
+
+  cd "$clone_dir"
+
+  local diff_text
+  diff_text="$(git diff 2>/dev/null || true)"
+
+  if [[ -z "$diff_text" ]]; then
+    log "No diff to review"
+    return 0
+  fi
+
+  log "Running self-review on diff (${#diff_text} chars)..."
+
+  local review_prompt
+  review_prompt="$(cat <<REVIEW
+You are reviewing your own code changes. Verify:
+
+1. Does the diff actually solve the original problem?
+   Original issue: $original_issue
+
+2. Does the diff avoid breaking existing functionality?
+3. Is the code correct, idiomatic, and consistent with the project?
+4. Are there any edge cases not handled?
+5. Are the tests adequate and correct?
+
+Diff to review:
+\`\`\`diff
+$diff_text
+\`\`\`
+
+Respond with either:
+- **APPROVED** if everything is correct
+- **CHANGES NEEDED:** followed by what needs to be fixed and how
+REVIEW
+)"
+
+  local messages_json
+  messages_json="$(jq -n \
+    --arg system "$system_prompt" \
+    --arg user "$review_prompt" \
+    '[{role: "system", content: $system}, {role: "user", content: $user}]'
+  )"
+
+  local api_result
+  api_result="$(api_complete "$messages_json")"
+  local review_response
+  review_response="$(echo "$api_result" | api_extract_content)"
+
+  echo "$review_response" > "$clone_dir/.codevoyager-review.md"
+
+  if echo "$review_response" | grep -qi "^APPROVED"; then
+    log "Self-review: APPROVED"
+    return 0
+  else
+    log "Self-review: CHANGES NEEDED"
+    return 1
+  fi
+}
+
 # ─── Test-and-retry loop ──────────────────────────────────────────────────
 
 apply_and_test_loop() {
@@ -260,15 +325,41 @@ apply_and_test_loop() {
     install_deps "$clone_dir" || true
 
     if run_tests "$clone_dir"; then
-      log "All tests passed on attempt $attempt"
-      return 0
+      log "Tests passed on attempt $attempt"
+
+      if self_review_diff "$clone_dir" "$system_prompt" "$user_msg"; then
+        log "Self-review passed on attempt $attempt"
+        return 0
+      else
+        log "Self-review found issues on attempt $attempt"
+
+        if [[ "$attempt" -ge "$MAX_RETRIES" ]]; then
+          log "Max retries reached after self-review failure"
+          return 1
+        fi
+
+        local review_result
+        review_result="$(cat "$clone_dir/.codevoyager-review.md")"
+
+        user_msg="$(cat <<USERMSG
+The self-review found the following issues with your code changes:
+
+\`\`\`
+$review_result
+\`\`\`
+
+Fix the issues identified above. Output corrected file contents.
+Do not break the tests — they are currently passing.
+USERMSG
+)"
+      fi
     else
       local test_output
       test_output="$(run_tests "$clone_dir" 2>&1 || true)"
       log "Tests failed on attempt $attempt"
 
       if [[ "$attempt" -ge "$MAX_RETRIES" ]]; then
-        log "Max retries reached. Saving error and proceeding anyway."
+        log "Max retries reached after test failure"
         echo "$test_output" > "$clone_dir/.codevoyager-test-failure.txt"
         return 1
       fi
@@ -281,7 +372,7 @@ The tests failed. Here is the test output:
 $test_output
 \`\`\`
 
-The code changes you previously suggested (in .codevoyager-response.md) caused test failures.
+The code changes you previously suggested caused test failures.
 Fix the issues. Output corrected file contents.
 USERMSG
 )"
