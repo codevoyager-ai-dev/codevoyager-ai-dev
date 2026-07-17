@@ -353,6 +353,8 @@ main() {
   local notif_count
   notif_count="$(echo "$notifications" | jq length)"
 
+  local handled_something=false
+
   if [[ "$notif_count" -gt 0 ]]; then
     log "Handling 1 notification ($notif_count pending)"
 
@@ -368,22 +370,29 @@ main() {
     local comment_url
     comment_url="$(echo "$notif_data" | jq -r '.subject.latest_comment_url // empty')"
 
+    log "Notification data: repo=$repo_full subject_url=$subject_url comment_url=$comment_url"
+
     local comment_body=""
     local pr_number=""
     local pr_title=""
 
     if [[ -n "$comment_url" && "$comment_url" != "null" ]]; then
-      comment_body="$(gh api "$comment_url" --jq '.body' 2>/dev/null || echo "")"
+      comment_body="$(gh api "$comment_url" --jq '.body' 2>&1)" || {
+        log "WARNING: Failed to fetch comment body: $comment_body"
+        comment_body=""
+      }
     fi
     if [[ -n "$subject_url" && "$subject_url" != "null" ]]; then
       pr_number="$(echo "$subject_url" | grep -oE '[0-9]+$')"
-      pr_title="$(gh api "$subject_url" --jq '.title' 2>/dev/null || echo "")"
+      pr_title="$(gh api "$subject_url" --jq '.title' 2>&1)" || {
+        log "WARNING: Failed to fetch PR title: $pr_title"
+        pr_title=""
+      }
     fi
 
-    if [[ -z "$pr_number" || -z "$comment_body" ]]; then
-      log "Skipping notification — missing data"
-      mark_notification_done "$notif_id"
-    else
+    log "Extracted: pr_number=$pr_number comment_body_len=${#comment_body}"
+
+    if [[ -n "$pr_number" && -n "$comment_body" ]]; then
       log "Handling review: PR #$pr_number on $repo_full"
 
       local task="Address this review comment on PR #$pr_number ($pr_title):
@@ -397,11 +406,15 @@ Make the requested changes and ensure all tests pass."
       fi
 
       mark_notification_done "$notif_id"
+      handled_something=true
+    else
+      log "Skipping notification — missing data (will retry next cycle)"
     fi
+  fi
 
   # ── Priority 2: Check help requests in own repo ─────────────
-  else
-    log "No notifications. Checking help requests in $MY_REPO..."
+  if [[ "$notif_count" -le 0 ]] || ! $handled_something; then
+    log "Checking help requests in $MY_REPO..."
     local help_requests
     help_requests="$(check_help_requests)"
     local help_count
@@ -441,23 +454,23 @@ Implement the requested changes or solve the problem described."
 
         if solve_with_opencode "$target_repo" "$task" "Help request #$help_issue_number"; then
           log "Help request #$help_issue_number completed"
+          handled_something=true
         fi
       fi
+    fi
+  fi
 
-    # ── Priority 3: Proactively find an issue ────────────────
+  # ── Priority 3: Proactively find an issue ────────────────
+  if ! $handled_something; then
+    log "Searching proactively for issues..."
+    local issues
+    issues="$(find_issue)"
+    local issue
+    issue="$(pick_best_issue "$issues" "$state")"
+
+    if [[ -z "$issue" || "$issue" == "null" ]]; then
+      log "No suitable issues found. Will retry next cycle."
     else
-      log "No help requests. Searching proactively for issues..."
-      local issues
-      issues="$(find_issue)"
-      local issue
-      issue="$(pick_best_issue "$issues" "$state")"
-
-      if [[ -z "$issue" || "$issue" == "null" ]]; then
-        log "No suitable issues found. Will retry next cycle."
-        save_state "$state"
-        exit 0
-      fi
-
       local repo_full
       repo_full="$(echo "$issue" | jq -r '.repository.nameWithOwner')"
       local issue_number
@@ -497,7 +510,6 @@ Ensure all existing tests still pass."
           .total_issues_resolved += 1 |
           .total_prs_opened += 1
         ')"
-
         log "Issue #$issue_number solved"
       else
         log "Failed to solve issue #$issue_number"
