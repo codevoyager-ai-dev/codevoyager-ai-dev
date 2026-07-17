@@ -219,6 +219,8 @@ build_task_prompt() {
   local repo_full="$1"
   local task="$2"
   local extra_context="$3"
+  local fork_remote="$4"
+  local branch_name="$5"
   local rules
   rules="$(cat "$REPO_DIR/rules.md")"
 
@@ -235,13 +237,22 @@ $task
 $extra_context
 
 ## Instructions
-- Read the repository files to understand the codebase
-- Implement a real, functional solution
-- Include or update tests
-- Run the project's tests to verify your changes
-- If tests fail, fix the code until they pass
-- Do NOT commit changes — leave that to me
-- Output a summary of what you changed when done
+1. Read the repository files to understand the codebase.
+2. Implement a real, functional solution. Split large files into smaller ones.
+3. Include or update tests.
+4. Run the project's tests. If they fail, fix the code until they pass.
+5. If no test framework is detected, verify your changes are correct by re-reading the modified files.
+6. Stage all changes with \`git add -A\`.
+7. Commit with \`git commit -m "[codevoyager] <description>"\`.
+8. Push to the remote: \`git push origin $branch_name\`.
+9. Create a PR using \`gh pr create --repo "$repo_full" --title "[codevoyager] <title>" --body "<summary>" --head "codevoyager-ai-dev:$branch_name" --base main\`.
+10. Verify the PR was created successfully. If any step fails, diagnose and fix it.
+11. Output a summary of everything you did.
+
+The fork remote is: $fork_remote
+The branch name is: $branch_name
+All git remote commands will work. The \`gh\` CLI is authenticated.
+Do NOT leave any step for me — handle everything including commit, push, and PR.
 PROMPT
 }
 
@@ -298,45 +309,13 @@ solve_with_opencode() {
 
   local prompt_file
   prompt_file="$(mktemp)"
-  build_task_prompt "$repo_full" "$task_description" "Link: $issue_ref" > "$prompt_file"
+  build_task_prompt "$repo_full" "$task_description" "Ref: $issue_ref" "$fork_remote" "$branch_name" > "$prompt_file"
 
   if run_opencode_task "$clone_dir" "$prompt_file"; then
     rm -f "$prompt_file"
-
-    install_deps "$clone_dir" || true
-    run_tests "$clone_dir" || log "Warning: tests failed after OpenCode"
-
-    cd "$clone_dir"
-    git add -A 2>/dev/null || true
-    if git diff --cached --quiet 2>/dev/null; then
-      log "No changes made by OpenCode"
-      cd "$REPO_DIR"
-      rm -rf "$clone_dir"
-      return 1
-    fi
-
-    local short_msg
-    short_msg="$(echo "$task_description" | head -1 | cut -c1-80)"
-    git commit -m "[codevoyager] $short_msg" 2>/dev/null || true
-    git push origin "$branch_name" 2>/dev/null || log "Push failed"
-
-    local pr_body
-    pr_body="## Summary
-
-$task_description
-
-### Changes
-See commit diff for details.
-
-### Testing
-- [x] Changes tested locally
-
-Ref: $issue_ref
-"
-    create_pr "$repo_full" "[codevoyager] $short_msg" "$pr_body" "$branch_name"
-
     cd "$REPO_DIR"
     rm -rf "$clone_dir"
+    log "Task completed by OpenCode (commit, push, PR handled by agent)"
     return 0
   else
     rm -f "$prompt_file"
