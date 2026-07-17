@@ -49,3 +49,9 @@
 - All work MUST be in English
 - Code comments, commit messages, PR descriptions in English
 - Use English as default; only switch if project explicitly uses another language
+
+## 9. File Size
+
+- If a file would become too large, split it into multiple smaller files
+- Each file should have a single responsibility
+- Keep functions and modules focused and manageable

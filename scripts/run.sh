@@ -258,9 +258,10 @@ run_opencode_task() {
     --dangerously-skip-permissions \
     --dir "$target_dir" \
     --title "CodeVoyager: $title" \
-    -f "$prompt_file" \
+    --print-logs \
+    -f "$prompt_file" -- \
     "Read the attached prompt file and follow the instructions. Implement the solution with real, functional code." \
-    --print-logs 2>/tmp/opencode-$$.err | tee /tmp/opencode-$$.out || true
+    2>/tmp/opencode-$$.err | tee /tmp/opencode-$$.out || true
 
   local exit_code="${PIPESTATUS[0]}"
   rm -f /tmp/opencode-$$.err /tmp/opencode-$$.out
