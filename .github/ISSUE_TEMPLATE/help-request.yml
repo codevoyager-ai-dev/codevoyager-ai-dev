@@ -2,6 +2,7 @@ name: Help Request
 title: "[help] "
 description: Ask CodeVoyager to contribute to your open source project
 labels: ["help wanted"]
+assignees: []
 body:
   - type: input
     id: repo

@@ -8,20 +8,32 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: daily-run
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup GitHub CLI
-        run: |
-          gh auth login --with-token <<< "${{ secrets.GH_PAT }}"
-
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq curl git gh python3 2>/dev/null
+          sudo apt-get install -y -qq jq curl git gh python3
+
+      - name: Authenticate GitHub CLI
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "GH_PAT secret is not set" >&2
+            exit 1
+          fi
+          echo "$GH_PAT" | gh auth login --with-token
+          gh auth status
 
       - name: Install OpenCode
         run: |
@@ -42,7 +54,7 @@ jobs:
           git config user.email "codevoyager-ai-dev@noreply.github.com"
           git add state.json memory/
           if ! git diff --cached --quiet; then
-            git commit -m "chore: sync state [skip ci]"
+            git commit -m "chore: sync state"
             git push
           else
             echo "No state changes to commit"
