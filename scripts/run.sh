@@ -26,7 +26,7 @@ main() {
   local state
   state="$(state_load)"
 
-  fork_init_credentials "$GH_token"
+  fork_init_credentials "$GH_TOKEN"
 
   local handled_something=false
 
